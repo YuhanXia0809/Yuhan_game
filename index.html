@@ -46,6 +46,7 @@
     border:1px solid var(--line); background:var(--panel); color:var(--ink-dim);
     width:30px;height:30px;border-radius:50%; font-family:inherit; font-size:15px; cursor:pointer;
   }
+  .hbtns{display:flex; gap:8px;}
   .hud{
     display:flex; align-items:center; justify-content:space-between;
     background:var(--panel); border:1px solid var(--line);
@@ -145,7 +146,10 @@
 <div class="wrap">
   <header>
     <h1>合成消除 <span>5×5 原型</span></h1>
-    <button class="help-btn" id="helpBtn">?</button>
+    <div class="hbtns">
+      <button class="help-btn" id="soundBtn" title="音效开关">🔊</button>
+      <button class="help-btn" id="helpBtn">?</button>
+    </div>
   </header>
 
   <div class="hud" id="hud">
@@ -202,6 +206,98 @@ const PALETTE = {
 function colorFor(v){ return PALETTE[v] || ['#e6e9ff','#aab0e0']; }
 
 let grid, tiles, lives, score, busy, over, uid, metrics;
+
+/* ---------------- AUDIO (Web Audio, no files) ---------------- */
+let actx=null, musicGain, sfxBus, soundOn=true, musicStarted=false;
+let nextBar=0, barIdx=0, schedTimer=null;
+const BAR=2.0;
+// chord progression vi-IV-I-V (A minor flavour) — sounds pleasant looping
+const PROG=[
+  {bass:110.00, notes:[220.00,261.63,329.63]}, // Am
+  {bass: 87.31, notes:[174.61,220.00,261.63]}, // F
+  {bass:130.81, notes:[261.63,329.63,392.00]}, // C
+  {bass: 98.00, notes:[196.00,246.94,293.66]}, // G
+];
+function ensureAudio(){
+  if(!actx){
+    const AC=window.AudioContext||window.webkitAudioContext;
+    actx=new AC();
+    musicGain=actx.createGain(); sfxBus=actx.createGain();
+    musicGain.gain.value=0.0001; sfxBus.gain.value=0.9;
+    musicGain.connect(actx.destination); sfxBus.connect(actx.destination);
+  }
+  if(actx.state==='suspended') actx.resume();
+  if(soundOn && !musicStarted) startMusic();
+}
+function startMusic(){
+  if(!actx) return;
+  musicStarted=true;
+  musicGain.gain.cancelScheduledValues(actx.currentTime);
+  musicGain.gain.setTargetAtTime(0.12, actx.currentTime, 0.6);
+  nextBar=actx.currentTime+0.1; barIdx=0;
+  schedTimer=setInterval(schedule, 60);
+}
+function stopMusic(){
+  if(schedTimer){clearInterval(schedTimer); schedTimer=null;}
+  musicStarted=false;
+  if(actx&&musicGain) musicGain.gain.setTargetAtTime(0.0001, actx.currentTime, 0.3);
+}
+function schedule(){
+  if(!actx) return;
+  while(nextBar < actx.currentTime + 0.3){
+    playBar(PROG[barIdx%PROG.length], nextBar);
+    nextBar += BAR; barIdx++;
+  }
+}
+function voice(freq,t,dur,type,vol,dest){
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type=type; o.frequency.setValueAtTime(freq,t);
+  o.connect(g); g.connect(dest);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol,t+0.04);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.start(t); o.stop(t+dur+0.05);
+}
+function playBar(chord,t){
+  voice(chord.bass, t, BAR*0.95, 'triangle', 0.4, musicGain);            // bass
+  chord.notes.forEach(f=>voice(f, t, BAR*0.9, 'sine', 0.16, musicGain)); // soft pad
+  const steps=[0,1,2,1,0,2,1,2], sd=BAR/steps.length;                    // arpeggio
+  steps.forEach((s,i)=>voice(chord.notes[s]*2, t+i*sd, sd*1.5, 'triangle', 0.12, musicGain));
+}
+function blip(freq,dur,type,vol,slideTo){
+  if(!actx||!soundOn) return;
+  const t=actx.currentTime;
+  const o=actx.createOscillator(), g=actx.createGain();
+  o.type=type||'triangle'; o.frequency.setValueAtTime(freq,t);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo,t+dur);
+  o.connect(g); g.connect(sfxBus);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol||0.3,t+0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.start(t); o.stop(t+dur+0.03);
+}
+function sfxTap(){ blip(520,0.07,'triangle',0.10); }
+function sfxMerge(wave){
+  const base=523.25, semis=[0,4,7,12,16,19,24];      // higher pitch each chain step
+  const s=semis[Math.min(wave-1,semis.length-1)]||0;
+  const f=base*Math.pow(2,s/12);
+  blip(f,0.18,'triangle',0.26); blip(f*1.5,0.16,'sine',0.14);
+}
+function sfxLose(){ blip(300,0.4,'sawtooth',0.20,120); }
+function sfxGain(){
+  [523.25,659.25,783.99].forEach((f,i)=>setTimeout(()=>blip(f,0.22,'sine',0.22),i*70));
+}
+function sfxGameOver(){
+  [392.00,329.63,261.63,196.00].forEach((f,i)=>setTimeout(()=>blip(f,0.5,'triangle',0.24,f*0.6),i*150));
+}
+function toggleSound(){
+  soundOn=!soundOn;
+  document.getElementById('soundBtn').textContent = soundOn?'🔊':'🔇';
+  if(!actx){ if(soundOn) ensureAudio(); return; }
+  if(soundOn){ if(actx.state==='suspended') actx.resume(); if(!musicStarted) startMusic(); }
+  else stopMusic();
+}
+
 
 const boardEl = document.getElementById('board');
 const heartsEl = document.getElementById('hearts');
@@ -346,6 +442,7 @@ async function resolve(clickedId){
       pop(tiles[anchorId]);
     }
     updateHud();
+    sfxMerge(wave);
     await sleep(CLEAR_MS);
     applyGravity();
     refill();
@@ -368,6 +465,7 @@ function renderHearts(){
 function loseLife(){
   lives--;
   if(lives<0){ lives=0; renderHearts(); endGame(false); return; }
+  sfxLose();
   renderHearts();
   const hs=heartsEl.children;
   if(hs[lives]) hs[lives].classList.add('lose');
@@ -376,6 +474,7 @@ function gainLives(n){
   const before=lives;
   lives=Math.min(START_LIVES, lives+n);
   renderHearts();
+  if(lives>before) sfxGain();
   for(let i=before;i<lives;i++) if(heartsEl.children[i]) heartsEl.children[i].classList.add('gain');
 }
 function updateHud(){ scoreEl.textContent=score; }
@@ -391,6 +490,7 @@ async function onTap(e){
   const el=e.target.closest('.tile'); if(!el) return;
   const id=+el.dataset.id; const t=tiles[id]; if(!t) return;
   busy=true;
+  ensureAudio(); sfxTap();
   t.value++; pop(t);
   await sleep(110);
   const chain=await resolve(id);
@@ -411,6 +511,7 @@ async function onTap(e){
 
 function endGame(win){
   over=true; renderHearts();
+  stopMusic(); sfxGameOver();
   document.getElementById('ovTitle').textContent = win?'通关!':'游戏结束';
   document.getElementById('ovSub').textContent   = win?'厉害':'连续点击都没能凑成消除';
   document.getElementById('ovScore').textContent = score;
@@ -451,6 +552,7 @@ function setup(){
   }
   renderHearts(); updateHud();
   overlay.classList.remove('show');
+  if(actx && soundOn && !musicStarted) startMusic();
 }
 
 // resize handling
@@ -474,6 +576,7 @@ document.getElementById('restartBtn').onclick=setup;
 const rules=document.getElementById('rules');
 const openRules=()=>rules.classList.add('show');
 document.getElementById('helpBtn').onclick=openRules;
+document.getElementById('soundBtn').onclick=toggleSound;
 document.getElementById('ruleBtn2').onclick=openRules;
 document.getElementById('ruleClose').onclick=()=>rules.classList.remove('show');
 document.getElementById('interpNote').innerHTML =
