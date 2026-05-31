@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>合成消除 · 原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg0:#0d1020; --bg1:#161b34;
+    --panel:rgba(255,255,255,.05);
+    --line:rgba(255,255,255,.08);
+    --ink:#eef1ff; --ink-dim:#9aa3c7;
+    --cell-empty:rgba(255,255,255,.035);
+    --board:#11152b;
+    --gap:8px; --pad:14px;
+    --heart:#ff4d6d; --heart-dim:rgba(255,77,109,.18);
+    --good:#5be3b0;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;}
+  body{
+    font-family:'Fredoka',system-ui,sans-serif;
+    color:var(--ink);
+    background:
+      radial-gradient(120% 80% at 50% -10%, #1d2547 0%, transparent 60%),
+      radial-gradient(90% 70% at 110% 110%, #221b3e 0%, transparent 55%),
+      var(--bg0);
+    min-height:100%;
+    display:flex; align-items:center; justify-content:center;
+    padding:18px 14px;
+    overflow-x:hidden;
+  }
+  /* subtle grain */
+  body::after{
+    content:""; position:fixed; inset:0; pointer-events:none; opacity:.05; z-index:99;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+  .wrap{width:100%; max-width:430px;}
+  header{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:14px;}
+  h1{font-size:21px; font-weight:700; margin:0; letter-spacing:.5px;}
+  h1 span{color:var(--ink-dim); font-weight:500; font-size:13px; margin-left:6px;}
+  .help-btn{
+    border:1px solid var(--line); background:var(--panel); color:var(--ink-dim);
+    width:30px;height:30px;border-radius:50%; font-family:inherit; font-size:15px; cursor:pointer;
+  }
+  .hud{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:16px; padding:12px 16px; margin-bottom:12px;
+    backdrop-filter:blur(8px);
+  }
+  .hearts{display:flex; gap:5px; font-size:22px; line-height:1;}
+  .heart{transition:transform .25s, opacity .25s, filter .25s;}
+  .heart.full{color:var(--heart); filter:drop-shadow(0 0 6px rgba(255,77,109,.5));}
+  .heart.empty{color:var(--heart-dim); filter:none;}
+  .heart.lose{animation:break .4s ease;}
+  .heart.gain{animation:grow .45s ease;}
+  @keyframes break{0%{transform:scale(1.3) rotate(-8deg)}60%{transform:scale(.4) rotate(10deg)}100%{transform:scale(1)}}
+  @keyframes grow{0%{transform:scale(.2)}55%{transform:scale(1.4)}100%{transform:scale(1)}}
+  .danger .hearts{animation:pulse 1s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  .score{text-align:right;}
+  .score .lab{font-size:11px; color:var(--ink-dim); letter-spacing:1px; text-transform:uppercase;}
+  .score .val{font-size:24px; font-weight:700; line-height:1;}
+
+  .board-shell{position:relative;}
+  #board{
+    position:relative; width:100%; aspect-ratio:1/1;
+    background:var(--board);
+    border:1px solid var(--line);
+    border-radius:22px; padding:var(--pad);
+    box-shadow:inset 0 2px 30px rgba(0,0,0,.45), 0 18px 40px -20px rgba(0,0,0,.8);
+    touch-action:manipulation;
+  }
+  .slot{position:absolute; border-radius:14px; background:var(--cell-empty);}
+  .tile{
+    position:absolute; border-radius:14px; display:flex; align-items:center; justify-content:center;
+    font-weight:700; color:#0c1023; cursor:pointer;
+    transform:translate(0,0);
+    transition:transform .26s cubic-bezier(.34,1.1,.4,1);
+    box-shadow:inset 0 -3px 0 rgba(0,0,0,.18), inset 0 2px 0 rgba(255,255,255,.35), 0 4px 10px -4px rgba(0,0,0,.5);
+    user-select:none;
+    will-change:transform;
+  }
+  .tile.pop{animation:pop .26s ease;}
+  @keyframes pop{0%{transform:translate(var(--tx),var(--ty)) scale(1)}45%{transform:translate(var(--tx),var(--ty)) scale(1.18)}100%{transform:translate(var(--tx),var(--ty)) scale(1)}}
+  .tile.clearing{transition:transform .2s ease, opacity .2s ease; opacity:0;}
+  .tile.clearing.flash{filter:brightness(1.8);}
+
+  /* toast / combo */
+  #toast{
+    position:absolute; left:50%; top:46%; transform:translate(-50%,-50%) scale(.6);
+    font-size:30px; font-weight:700; color:#fff; opacity:0; pointer-events:none;
+    text-shadow:0 4px 18px rgba(0,0,0,.6); white-space:nowrap; z-index:5;
+  }
+  #toast.show{animation:toast 1s ease;}
+  @keyframes toast{0%{opacity:0;transform:translate(-50%,-50%) scale(.5)}20%{opacity:1;transform:translate(-50%,-58%) scale(1.1)}70%{opacity:1;transform:translate(-50%,-66%) scale(1)}100%{opacity:0;transform:translate(-50%,-78%) scale(.95)}}
+
+  footer{margin-top:14px; display:flex; gap:10px;}
+  button.act{
+    flex:1; font-family:inherit; font-size:15px; font-weight:600;
+    border:1px solid var(--line); background:var(--panel); color:var(--ink);
+    border-radius:14px; padding:12px; cursor:pointer; transition:.15s;
+  }
+  button.act:active{transform:scale(.97); background:rgba(255,255,255,.1);}
+
+  /* overlay */
+  .overlay{
+    position:absolute; inset:0; border-radius:22px; z-index:20;
+    background:rgba(10,12,26,.86); backdrop-filter:blur(6px);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+    opacity:0; pointer-events:none; transition:opacity .3s;
+  }
+  .overlay.show{opacity:1; pointer-events:auto;}
+  .overlay h2{font-size:32px; margin:0;}
+  .overlay p{margin:0; color:var(--ink-dim); font-size:15px;}
+  .overlay .big{font-size:46px; font-weight:700; color:var(--good);}
+  .overlay button{
+    font-family:inherit; font-size:16px; font-weight:600; border:none;
+    background:linear-gradient(135deg,#6b8bff,#9a6bff); color:#fff;
+    padding:13px 34px; border-radius:30px; cursor:pointer; box-shadow:0 10px 24px -10px #6b8bff;
+  }
+
+  /* rules panel */
+  .rules{
+    position:fixed; inset:0; z-index:200; background:rgba(8,10,22,.9); backdrop-filter:blur(8px);
+    display:flex; align-items:center; justify-content:center; padding:20px;
+    opacity:0; pointer-events:none; transition:.25s;
+  }
+  .rules.show{opacity:1; pointer-events:auto;}
+  .rules-card{
+    background:var(--bg1); border:1px solid var(--line); border-radius:20px;
+    max-width:380px; width:100%; padding:22px; max-height:84vh; overflow:auto;
+  }
+  .rules-card h3{margin:0 0 12px; font-size:19px;}
+  .rules-card li{margin:7px 0; color:#cfd5f0; font-size:14px; line-height:1.5;}
+  .rules-card .note{margin-top:14px; padding:12px; background:rgba(255,177,61,.1); border:1px solid rgba(255,177,61,.25); border-radius:12px; font-size:13px; color:#ffd79a;}
+  .rules-card button{margin-top:16px; width:100%; font-family:inherit; font-weight:600; font-size:15px; border:none; background:#6b8bff; color:#fff; padding:12px; border-radius:12px; cursor:pointer;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>合成消除 <span>5×5 原型</span></h1>
+    <button class="help-btn" id="helpBtn">?</button>
+  </header>
+
+  <div class="hud" id="hud">
+    <div class="hearts" id="hearts"></div>
+    <div class="score"><div class="lab">得分</div><div class="val" id="score">0</div></div>
+  </div>
+
+  <div class="board-shell">
+    <div id="board"></div>
+    <div id="toast"></div>
+    <div class="overlay" id="overlay">
+      <h2 id="ovTitle">游戏结束</h2>
+      <p id="ovSub">连续 6 次点击没有消除</p>
+      <div class="big" id="ovScore">0</div>
+      <button id="restartBtn">再来一局</button>
+    </div>
+  </div>
+
+  <footer>
+    <button class="act" id="newBtn">新游戏</button>
+    <button class="act" id="ruleBtn2">玩法说明</button>
+  </footer>
+</div>
+
+<div class="rules" id="rules">
+  <div class="rules-card">
+    <h3>玩法</h3>
+    <ul style="padding-left:18px;margin:0;">
+      <li>点击任意格子,它的数字 <b>+1</b>。</li>
+      <li>当 <b>3 个或更多</b> 相同数字 <b>横、竖或拐角(L形)相连</b>,就会消除,并在其中一个位置合成成 <b>数字+1</b> 的新格子。</li>
+      <li>上方格子下落,顶部随机补充 1~5 的新格子。</li>
+      <li>合成后若又凑成相连,会 <b>连锁继续消除</b>(一次点击消除多次)。</li>
+      <li><b>5 条命</b>:每次点击若 <b>没消除任何东西</b>就扣 1 条命,扣光再点一次就输。</li>
+      <li>一次点击触发的 <b>连锁达到 3 段回 1 命,4 段回 2 命</b>(更高每多一段多回 1 命,上限 5)。</li>
+    </ul>
+    <div class="note" id="interpNote"></div>
+    <button id="ruleClose">开始玩</button>
+  </div>
+</div>
+
+<script>
+const SIZE = 5;
+const START_LIVES = 5;
+const CLEAR_MS = 200;
+const FALL_MS = 270;
+
+// value -> [light, dark] gradient stops
+const PALETTE = {
+  1:['#46e0cf','#16b29c'], 2:['#6c9bff','#3a63e0'], 3:['#b07cff','#7d3ff2'],
+  4:['#ff7cc0','#e83f95'], 5:['#ffc15a','#f59415'], 6:['#ff8a5c','#ea5520'],
+  7:['#ff6478','#e62742'], 8:['#8ee36a','#46b22f'], 9:['#56d4ff','#1f9fe0'],
+  10:['#ffd86b','#f0a81e'], 11:['#c0c6ff','#7a82e8'], 12:['#ff9de0','#e85cc0']
+};
+function colorFor(v){ return PALETTE[v] || ['#e6e9ff','#aab0e0']; }
+
+let grid, tiles, lives, score, busy, over, uid, metrics;
+
+const boardEl = document.getElementById('board');
+const heartsEl = document.getElementById('hearts');
+const scoreEl  = document.getElementById('score');
+const hudEl    = document.getElementById('hud');
+const toastEl  = document.getElementById('toast');
+const overlay  = document.getElementById('overlay');
+
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const rand  = (a,b)=> a + Math.floor(Math.random()*(b-a+1));
+
+function measure(){
+  const w = boardEl.clientWidth;
+  const pad = parseFloat(getComputedStyle(boardEl).paddingLeft);
+  const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap'));
+  const cell = (w - pad*2) / SIZE;
+  metrics = {pad, gap, cell, tile: cell - gap};
+}
+function xOf(c){ return metrics.pad + c*metrics.cell + metrics.gap/2; }
+function yOf(r){ return metrics.pad + r*metrics.cell + metrics.gap/2; }
+
+function drawSlots(){
+  // static empty-cell backgrounds
+  for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){
+    const s=document.createElement('div');
+    s.className='slot';
+    s.style.width=s.style.height=metrics.tile+'px';
+    s.style.left=xOf(c)+'px'; s.style.top=yOf(r)+'px';
+    boardEl.appendChild(s);
+  }
+}
+
+function styleTile(t){
+  const [a,b]=colorFor(t.value);
+  t.el.style.background=`linear-gradient(150deg,${a},${b})`;
+  t.el.textContent=t.value;
+  const len=String(t.value).length;
+  t.el.style.fontSize=(metrics.tile*(len>=3?0.36:len===2?0.46:0.54))+'px';
+}
+function place(t, row, col, animate){
+  const tx=xOf(col), ty=yOf(row);
+  t.el.style.setProperty('--tx',tx+'px');
+  t.el.style.setProperty('--ty',ty+'px');
+  if(!animate){
+    const tr=t.el.style.transition; t.el.style.transition='none';
+    t.el.style.transform=`translate(${tx}px,${ty}px)`;
+    t.el.offsetHeight; t.el.style.transition=tr||'';
+  } else {
+    t.el.style.transform=`translate(${tx}px,${ty}px)`;
+  }
+}
+function reposition(t, animate=true){ place(t,t.row,t.col,animate); }
+
+function createTile(value,row,col){
+  const id = ++uid;
+  const el=document.createElement('div');
+  el.className='tile'; el.dataset.id=id;
+  el.style.width=el.style.height=metrics.tile+'px';
+  const t={id,value,row,col,el};
+  tiles[id]=t;
+  styleTile(t);
+  boardEl.appendChild(el);
+  return t;
+}
+function pop(t){ styleTile(t); t.el.classList.remove('pop'); void t.el.offsetWidth; t.el.classList.add('pop'); }
+
+function clearTile(t){
+  const el=t.el;
+  el.classList.add('clearing','flash');
+  delete tiles[t.id];
+  setTimeout(()=>el.remove(), CLEAR_MS+30);
+}
+
+function findGroups(){
+  const seen=Array.from({length:SIZE},()=>Array(SIZE).fill(false));
+  const groups=[];
+  for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){
+    if(seen[r][c]) continue;
+    const id=grid[r][c];
+    if(id==null){seen[r][c]=true;continue;}
+    const val=tiles[id].value;
+    const stack=[{r,c}], comp=[]; seen[r][c]=true;
+    while(stack.length){
+      const cur=stack.pop(); comp.push(cur);
+      for(const [dr,dc] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        const nr=cur.r+dr,nc=cur.c+dc;
+        if(nr<0||nc<0||nr>=SIZE||nc>=SIZE||seen[nr][nc]) continue;
+        const nid=grid[nr][nc];
+        if(nid==null) continue;
+        if(tiles[nid].value===val){seen[nr][nc]=true;stack.push({r:nr,c:nc});}
+      }
+    }
+    if(comp.length>=3) groups.push({value:val,cells:comp});
+  }
+  return groups;
+}
+
+function applyGravity(){
+  for(let c=0;c<SIZE;c++){
+    const col=[];
+    for(let r=SIZE-1;r>=0;r--){ if(grid[r][c]!=null){col.push(grid[r][c]); grid[r][c]=null;} }
+    let r=SIZE-1;
+    for(const id of col){ grid[r][c]=id; const t=tiles[id]; t.row=r; t.col=c; reposition(t,true); r--; }
+  }
+}
+function refill(){
+  for(let c=0;c<SIZE;c++){
+    const empties=[];
+    for(let r=0;r<SIZE;r++) if(grid[r][c]==null) empties.push(r);
+    const k=empties.length;
+    empties.forEach((r,i)=>{
+      const t=createTile(rand(1,5),r,c);
+      grid[r][c]=t.id;
+      place(t, r-k, c, false);            // start above the board
+      requestAnimationFrame(()=>requestAnimationFrame(()=>reposition(t,true)));
+    });
+  }
+}
+
+async function resolve(clickedId){
+  let wave=0;
+  while(true){
+    const groups=findGroups();
+    if(groups.length===0) break;
+    wave++;
+    for(const g of groups){
+      let anchorId;
+      if(wave===1 && g.cells.some(c=>grid[c.r][c.c]===clickedId)){
+        anchorId=clickedId;
+      } else {
+        let best=g.cells[0];
+        for(const c of g.cells) if(c.r>best.r || (c.r===best.r && c.c<best.c)) best=c;
+        anchorId=grid[best.r][best.c];
+      }
+      score += g.value * g.cells.length;
+      for(const c of g.cells){
+        const tid=grid[c.r][c.c];
+        if(tid===anchorId) continue;
+        clearTile(tiles[tid]); grid[c.r][c.c]=null;
+      }
+      tiles[anchorId].value = g.value+1;
+      pop(tiles[anchorId]);
+    }
+    updateHud();
+    await sleep(CLEAR_MS);
+    applyGravity();
+    refill();
+    await sleep(FALL_MS);
+  }
+  return wave;
+}
+
+function renderHearts(){
+  heartsEl.innerHTML='';
+  for(let i=0;i<START_LIVES;i++){
+    const h=document.createElement('span');
+    const full=i<lives;
+    h.className='heart '+(full?'full':'empty');
+    h.textContent=full?'♥':'♡';
+    heartsEl.appendChild(h);
+  }
+  hudEl.classList.toggle('danger', lives<=1 && !over);
+}
+function loseLife(){
+  lives--;
+  if(lives<0){ lives=0; renderHearts(); endGame(false); return; }
+  renderHearts();
+  const hs=heartsEl.children;
+  if(hs[lives]) hs[lives].classList.add('lose');
+}
+function gainLives(n){
+  const before=lives;
+  lives=Math.min(START_LIVES, lives+n);
+  renderHearts();
+  for(let i=before;i<lives;i++) if(heartsEl.children[i]) heartsEl.children[i].classList.add('gain');
+}
+function updateHud(){ scoreEl.textContent=score; }
+
+function showToast(text,color){
+  toastEl.textContent=text;
+  toastEl.style.color=color||'#fff';
+  toastEl.classList.remove('show'); void toastEl.offsetWidth; toastEl.classList.add('show');
+}
+
+async function onTap(e){
+  if(busy||over) return;
+  const el=e.target.closest('.tile'); if(!el) return;
+  const id=+el.dataset.id; const t=tiles[id]; if(!t) return;
+  busy=true;
+  t.value++; pop(t);
+  await sleep(110);
+  const chain=await resolve(id);
+  if(chain===0){
+    loseLife();
+  } else if(chain>=2){
+    if(chain>=3){
+      const restore=chain-2;
+      gainLives(restore);
+      showToast(`连消 x${chain}  +${restore}♥`, 'var(--good)');
+    } else {
+      showToast(`连消 x${chain}`,'#ffd79a');
+    }
+  }
+  updateHud();
+  busy=false;
+}
+
+function endGame(win){
+  over=true; renderHearts();
+  document.getElementById('ovTitle').textContent = win?'通关!':'游戏结束';
+  document.getElementById('ovSub').textContent   = win?'厉害':'连续点击都没能凑成消除';
+  document.getElementById('ovScore').textContent = score;
+  overlay.classList.add('show');
+}
+
+function genValues(){
+  const v=Array.from({length:SIZE},()=>Array(SIZE).fill(0));
+  const comp=(r,c)=>{
+    const val=v[r][c]; if(!val) return 0;
+    const seen=Array.from({length:SIZE},()=>Array(SIZE).fill(false));
+    const st=[{r,c}]; seen[r][c]=true; let n=0;
+    while(st.length){const cur=st.pop();n++;
+      for(const [dr,dc] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        const nr=cur.r+dr,nc=cur.c+dc;
+        if(nr<0||nc<0||nr>=SIZE||nc>=SIZE||seen[nr][nc]) continue;
+        if(v[nr][nc]===val){seen[nr][nc]=true;st.push({r:nr,c:nc});}
+      }}
+    return n;
+  };
+  for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){
+    const opts=[1,2,3,4,5].sort(()=>Math.random()-0.5);
+    let chosen=opts[0];
+    for(const val of opts){ v[r][c]=val; if(comp(r,c)<3){chosen=val;break;} }
+    v[r][c]=chosen;
+  }
+  return v;
+}
+
+function setup(){
+  boardEl.innerHTML='';
+  measure(); drawSlots();
+  grid=Array.from({length:SIZE},()=>Array(SIZE).fill(null));
+  tiles={}; uid=0; lives=START_LIVES; score=0; busy=false; over=false;
+  const v=genValues();
+  for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++){
+    const t=createTile(v[r][c],r,c); grid[r][c]=t.id; place(t,r,c,false);
+  }
+  renderHearts(); updateHud();
+  overlay.classList.remove('show');
+}
+
+// resize handling
+let rT;
+window.addEventListener('resize',()=>{
+  clearTimeout(rT);
+  rT=setTimeout(()=>{
+    measure();
+    boardEl.querySelectorAll('.slot').forEach(s=>s.remove());
+    drawSlots();
+    Object.values(tiles).forEach(t=>{
+      t.el.style.width=t.el.style.height=metrics.tile+'px';
+      styleTile(t); place(t,t.row,t.col,false);
+    });
+  },120);
+});
+
+boardEl.addEventListener('click', onTap);
+document.getElementById('newBtn').onclick=setup;
+document.getElementById('restartBtn').onclick=setup;
+const rules=document.getElementById('rules');
+const openRules=()=>rules.classList.add('show');
+document.getElementById('helpBtn').onclick=openRules;
+document.getElementById('ruleBtn2').onclick=openRules;
+document.getElementById('ruleClose').onclick=()=>rules.classList.remove('show');
+document.getElementById('interpNote').innerHTML =
+  '我对两处歧义的处理:<br>① "连续消除N次" = 一次点击引发的<b>连锁段数</b>(每一波消除算一段)。<br>② 生命是一个<b>5格的池子</b>:空点击 -1,只有连锁≥3才回血;普通单次消除不扣也不回。若你想要"任意一次消除就回满",告诉我即可改。';
+
+setup();
+</script>
+</body>
+</html>
